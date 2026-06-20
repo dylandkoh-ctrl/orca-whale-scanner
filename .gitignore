@@ -1,0 +1,15 @@
+# Python virtualenv (huge, platform-specific — Streamlit Cloud builds its own)
+.venv/
+__pycache__/
+*.pyc
+
+# Local SQLite watchlist (ephemeral; recreated on first run)
+orca.db
+
+# cloudflared binary (38MB, platform-specific — not needed in the cloud)
+cloudflared
+*.tgz
+
+# Claude Code / editor cruft
+.claude/
+.DS_Store
