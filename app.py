@@ -19,7 +19,7 @@ import time
 import pandas as pd
 import streamlit as st
 
-from orca import config, discovery, store
+from orca import config, discovery, profiling, store
 from orca.api import get_json, parallel_map
 from orca.scan import run_scan
 
@@ -78,7 +78,7 @@ thresholds = {
 }
 
 st.sidebar.divider()
-run = st.sidebar.button("🔄 Refresh scan", type="primary", use_container_width=True)
+run = st.sidebar.button("🔄 Refresh scan", type="primary", width="stretch")
 
 
 # --- run a scan on demand ------------------------------------------------
@@ -159,27 +159,70 @@ with tab_top:
         top.insert(0, "rank", range(1, len(top) + 1))
         top["user"] = top.apply(
             lambda r: r["display_name"] or f"{r['wallet'][:6]}…{r['wallet'][-4:]}", axis=1)
-        top["profile"] = PROFILE_BASE + top["wallet"]
-        top["flag"] = top["is_system"].apply(lambda s: "⚠️ system/MM" if s else "")
-        st.dataframe(
-            top[["rank", "match_title", "bet_label", "user", "usd", "shares",
-                 "price", "wallet_value", "legs", "flag", "profile", "wallet"]],
-            use_container_width=True, hide_index=True,
-            column_config={
-                "rank": st.column_config.NumberColumn("#", width="small"),
-                "match_title": st.column_config.TextColumn("match"),
-                "bet_label": st.column_config.TextColumn("bet"),
-                "usd": st.column_config.NumberColumn("amount", format="$%.0f"),
-                "shares": st.column_config.NumberColumn("shares", format="%.0f"),
-                "price": st.column_config.NumberColumn("price", format="$%.3f"),
-                "wallet_value": st.column_config.NumberColumn("portfolio", format="$%.0f"),
-                "legs": st.column_config.NumberColumn("legs", width="small",
-                    help="# of this match's markets the wallet holds"),
-                "flag": st.column_config.TextColumn("flag", width="small"),
-                "profile": st.column_config.LinkColumn("profile", display_text="View ↗"),
-                "wallet": st.column_config.TextColumn("wallet address"),
-            },
-        )
+
+        # Per-position entry/current detail (cost basis vs market value), pulled
+        # from /positions. Cached per wallet so multi-leg wallets don't refetch.
+        _detail: dict[str, dict] = {}
+
+        def pos_detail(wallet: str, cid: str, oi) -> dict:
+            if wallet not in _detail:
+                _detail[wallet] = profiling.position_details(wallet)
+            return _detail[wallet].get((cid, oi), {})
+
+        table_view = st.toggle("Table view", value=False,
+                               help="Compact table instead of cards (handy on desktop).")
+
+        if table_view:
+            det = [pos_detail(r.wallet, r.condition_id, r.outcome_index)
+                   for r in top.itertuples()]
+            top["buy_price"] = [d.get("avg_price") for d in det]
+            top["entry_cost"] = [d.get("initial_value") for d in det]
+            top["current_value"] = [d.get("current_value") or u
+                                    for d, u in zip(det, top["usd"])]
+            top["pnl"] = [d.get("cash_pnl") for d in det]
+            top["profile"] = PROFILE_BASE + top["wallet"]
+            st.dataframe(
+                top[["rank", "match_title", "bet_label", "user", "buy_price",
+                     "entry_cost", "current_value", "pnl", "wallet_value",
+                     "legs", "profile"]],
+                width="stretch", hide_index=True,
+                column_config={
+                    "rank": st.column_config.NumberColumn("#", width="small"),
+                    "match_title": st.column_config.TextColumn("match"),
+                    "bet_label": st.column_config.TextColumn("bet"),
+                    "buy_price": st.column_config.NumberColumn("buy $/sh", format="$%.3f"),
+                    "entry_cost": st.column_config.NumberColumn("entry cost", format="$%.0f"),
+                    "current_value": st.column_config.NumberColumn("current value", format="$%.0f"),
+                    "pnl": st.column_config.NumberColumn("PnL", format="$%.0f"),
+                    "wallet_value": st.column_config.NumberColumn("portfolio", format="$%.0f"),
+                    "legs": st.column_config.NumberColumn("legs", width="small"),
+                    "profile": st.column_config.LinkColumn("profile", display_text="View ↗"),
+                },
+            )
+        else:
+            # Mobile-friendly cards: entry (cost basis) vs current (market value).
+            for r in top.itertuples():
+                d = pos_detail(r.wallet, r.condition_id, r.outcome_index)
+                avg_price = d.get("avg_price") or 0.0
+                entry_cost = d.get("initial_value") or 0.0
+                cur_price = d.get("cur_price") or r.price
+                cur_value = d.get("current_value") or r.usd
+                pnl = d.get("cash_pnl")
+                with st.container(border=True):
+                    sys_tag = " · ⚠️ system/MM" if r.is_system else ""
+                    st.markdown(f"**#{r.rank} · {r.bet_label}**  ·  {r.match_title}")
+                    c0, c1 = st.columns([3, 2])
+                    c0.markdown(f"👤 **{r.user}**")
+                    c0.caption(f"portfolio ${r.wallet_value:,.0f} · {int(r.legs)} legs{sys_tag}")
+                    c1.link_button("Polymarket ↗", PROFILE_BASE + r.wallet,
+                                   width="stretch")
+                    m1, m2 = st.columns(2)
+                    m1.metric("Entry (cost)",
+                              f"${entry_cost:,.0f}" if entry_cost else "—")
+                    m2.metric("Current value", f"${cur_value:,.0f}",
+                              delta=(f"${pnl:,.0f}" if pnl is not None else None))
+                    st.caption(f"Buy ${avg_price:.3f} → now ${cur_price:.3f} per share  ·  "
+                               f"{int(r.shares):,} shares")
 
 
 # --- Flagged Now (grouped by match) -------------------------------------
@@ -212,7 +255,7 @@ with tab_flagged:
                         "realized_pnl": p.realized_pnl if p else None,
                         "value_usd": p.value_usd if p else None,
                     })
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True,
+                st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True,
                              column_config={
                                  "grade": st.column_config.ProgressColumn(
                                      "grade", min_value=0, max_value=100),
@@ -240,7 +283,7 @@ with tab_watch:
         st.dataframe(
             wl[["wallet", "display_name", "grade", "is_mm_hedge", "realized_pnl",
                 "value_usd", "win_rate", "concentration", "seen", "first_seen", "last_seen"]],
-            use_container_width=True, hide_index=True,
+            width="stretch", hide_index=True,
             column_config={
                 "grade": st.column_config.ProgressColumn("grade", min_value=0, max_value=100),
                 "realized_pnl": st.column_config.NumberColumn(format="$%.0f"),
@@ -264,7 +307,7 @@ with tab_consensus:
         st.dataframe(
             cons[["match_title", "bet_label", "group", "triggers",
                   "total_usd", "n_accounts", "top_usd"]],
-            use_container_width=True, hide_index=True,
+            width="stretch", hide_index=True,
             column_config={
                 "total_usd": st.column_config.NumberColumn("combined $", format="$%.0f"),
                 "top_usd": st.column_config.NumberColumn("largest wallet $", format="$%.0f"),

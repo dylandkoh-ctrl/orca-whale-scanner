@@ -1,5 +1,5 @@
 # Orca — World Cup Whale Scanner
-streamlit>=1.40
+streamlit>=1.50
 httpx>=0.27
 pandas>=2.2
 python-dateutil>=2.9

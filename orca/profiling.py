@@ -111,6 +111,31 @@ def profile_wallet(wallet: str) -> WalletProfile:
     )
 
 
+def position_details(wallet: str) -> dict[tuple, dict]:
+    """Per-position entry/current detail for a wallet, keyed by (conditionId, outcomeIndex).
+
+    Used by the Top Positions view to show cost basis (avg buy price) alongside
+    current market value. Hits the same cached /positions call as profiling.
+    """
+    positions = get_json(
+        config.DATA_HOST, "/positions",
+        params={"user": wallet, "sizeThreshold": 1},
+        ttl=config.PROFILE_TTL,
+    ) or []
+    out: dict[tuple, dict] = {}
+    for p in positions:
+        key = (p.get("conditionId"), p.get("outcomeIndex"))
+        out[key] = {
+            "avg_price": to_float(p.get("avgPrice")),       # buy price / share
+            "initial_value": to_float(p.get("initialValue")),  # cost basis (USD)
+            "current_value": to_float(p.get("currentValue")),  # market value (USD)
+            "cur_price": to_float(p.get("curPrice")),
+            "cash_pnl": to_float(p.get("cashPnl")),
+            "pct_pnl": to_float(p.get("percentPnl")),
+        }
+    return out
+
+
 def profile_wallets(wallets: list[str]) -> dict[str, WalletProfile]:
     """Profile a set of wallets, de-duplicated, concurrently."""
     uniq = [w for w in dict.fromkeys(wallets) if w]
