@@ -19,7 +19,7 @@ import time
 import pandas as pd
 import streamlit as st
 
-from orca import config, discovery, profiling, store
+from orca import config, discovery, profiling, store, trades
 from orca.api import get_json, parallel_map
 from orca.scan import run_scan
 
@@ -62,6 +62,8 @@ groups = {g: st.sidebar.checkbox(g, value=default)
 
 top_n = st.sidebar.number_input("Top positions to show", value=5, min_value=1,
                                 max_value=50, step=1)
+min_print_usd = st.sidebar.number_input("Live print ≥ $ (Trigger D)",
+                                        value=config.LARGE_PRINT_USD, step=50_000)
 
 st.sidebar.subheader("Detection thresholds")
 thresholds = {
@@ -101,8 +103,9 @@ if matches:
 
 PROFILE_BASE = "https://polymarket.com/profile/"
 
-tab_top, tab_flagged, tab_watch, tab_consensus = st.tabs(
-    ["🐋 Top Positions", "🚩 Flagged Now", "📋 Watchlist", "📊 Consensus Board"]
+tab_top, tab_prints, tab_flagged, tab_watch, tab_consensus = st.tabs(
+    ["🐋 Top Positions", "🔴 Live Prints", "🚩 Flagged Now",
+     "📋 Watchlist", "📊 Consensus Board"]
 )
 
 
@@ -223,6 +226,36 @@ with tab_top:
                               delta=(f"${pnl:,.0f}" if pnl is not None else None))
                     st.caption(f"Buy ${avg_price:.3f} → now ${cur_price:.3f} per share  ·  "
                                f"{int(r.shares):,} shares")
+
+
+# --- Live Prints (Trigger D) --------------------------------------------
+with tab_prints:
+    st.caption(f"Single fills ≥ ${min_print_usd:,.0f} on {result.date}'s matches — "
+               "live order flow, newest first. Catches the entry before it lands "
+               "in holders. (Shows recent flow, ~last few days.)")
+    force = st.button("🔄 Check for new prints", width="stretch")
+    prints = trades.fetch_large_prints(
+        result.markets, min_usd=min_print_usd, ttl=0 if force else config.TRADES_TTL)
+    if prints.empty:
+        st.info("No large prints at this threshold yet. Lower it in the sidebar, "
+                "or check back closer to / during a match.")
+    else:
+        # Trigger D feeds the watchlist: profile the print wallets and persist.
+        pw = [w for w in prints["wallet"].unique() if w]
+        pprofiles = profiling.profile_wallets(pw)
+        pnames = {r.wallet: r.display_name for r in prints.itertuples() if r.display_name}
+        store.persist_scan(conn, [], pprofiles, pnames)
+
+        st.caption(f"{len(prints)} prints · {prints['usd'].sum():,.0f} total $ flagged")
+        for r in prints.itertuples():
+            ts = dt.datetime.fromtimestamp(r.timestamp).strftime("%b %d · %H:%M")
+            dot = "🟢" if r.side == "BUY" else "🔴"
+            with st.container(border=True):
+                st.markdown(f"{dot} **{r.side} · {r.bet_label}**  ·  ${r.usd:,.0f}")
+                c0, c1 = st.columns([3, 2])
+                c0.markdown(f"👤 **{r.display_name or r.wallet[:6] + '…' + r.wallet[-4:]}**")
+                c0.caption(f"{r.match_title} · {ts} · {int(r.size):,} sh @ ${r.price:.3f}")
+                c1.link_button("Polymarket ↗", PROFILE_BASE + r.wallet, width="stretch")
 
 
 # --- Flagged Now (grouped by match) -------------------------------------

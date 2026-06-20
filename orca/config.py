@@ -46,8 +46,12 @@ NOISE_FLOOR_USD = 10_000
 # >= CLUSTER_WALLET_USD on the *same* bet.
 CLUSTER_WALLET_USD = 25_000
 CLUSTER_MIN_WALLETS = 3
-# Trigger D (held for a later phase): single live fill >= this on /trades.
-LARGE_PRINT_USD = 50_000
+# Trigger D: flag any single live fill >= this on /trades.
+LARGE_PRINT_USD = 300_000
+TRADES_PAGE_LIMIT = 100      # /trades times out above ~100 per call
+TRADES_PAGES = 1             # one page ≈ several days of >=$300K prints; offset
+                             # pagination on the filtered feed times out (408)
+TRADES_TTL = 30             # seconds to cache the prints feed
 
 # --- Fetch behaviour ---
 HOLDERS_LIMIT = 100          # holders per token to pull from /holders
