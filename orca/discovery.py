@@ -14,6 +14,7 @@ from __future__ import annotations
 import datetime as dt
 import re
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from dateutil import parser as dtparser
 
@@ -25,19 +26,33 @@ from .api import get_json, parse_json_field, to_float
 _MATCH_RE = re.compile(r"^.+\svs\.\s.+$")
 
 
-def _today_iso() -> str:
-    return dt.date.today().isoformat()
+def _tz(tz: str | None):
+    """Resolve a tz name to a tzinfo; None -> the machine's local zone.
+
+    On Streamlit Cloud the server runs in UTC, so callers pass the *browser's*
+    timezone to keep "today's games" correct for the user, not the server.
+    """
+    if tz:
+        try:
+            return ZoneInfo(tz)
+        except Exception:
+            return None
+    return None
 
 
-def _local_date(iso_utc: str) -> str:
-    """UTC ISO timestamp -> local calendar date (ISO).
+def _today_iso(tz: str | None = None) -> str:
+    return dt.datetime.now(_tz(tz)).date().isoformat()
 
-    Match endDates are UTC, but "today's games" means today in the user's local
+
+def _local_date(iso_utc: str, tz: str | None = None) -> str:
+    """UTC ISO timestamp -> calendar date (ISO) in the given timezone.
+
+    Match endDates are UTC, but "today's games" means today in the *viewer's*
     timezone — an evening US kickoff on the 19th is already the 20th in UTC, so
     comparing raw UTC date strings drops those matches.
     """
     try:
-        return dtparser.isoparse(iso_utc).astimezone().date().isoformat()
+        return dtparser.isoparse(iso_utc).astimezone(_tz(tz)).date().isoformat()
     except (ValueError, TypeError):
         return (iso_utc or "")[:10]
 
@@ -112,20 +127,22 @@ def _iter_wc_events() -> list[dict[str, Any]]:
 
 
 def discover_matches(date: str | None = None,
-                     groups: dict[str, bool] | None = None) -> list[dict[str, Any]]:
+                     groups: dict[str, bool] | None = None,
+                     tz: str | None = None) -> list[dict[str, Any]]:
     """Normalised markets for all matches kicking off on `date` (default today).
 
+    `tz` is the viewer's timezone (IANA name); dates are computed in it.
     Only the market families enabled in `groups` (default config.MARKET_GROUPS)
     are returned.
     """
-    date = date or _today_iso()
+    date = date or _today_iso(tz)
     groups = groups or config.MARKET_GROUPS
 
     markets: list[dict[str, Any]] = []
     seen: set[str] = set()
     for event in _iter_wc_events():
         end = event.get("endDate") or ""
-        if _local_date(end) != date:
+        if _local_date(end, tz) != date:
             continue
         match_title, group = _classify_group(event.get("title", ""))
         if not _is_match(match_title) or not groups.get(group, False):
@@ -142,12 +159,12 @@ def discover_matches(date: str | None = None,
     return markets
 
 
-def list_match_days(limit_days: int = 7) -> list[str]:
-    """Distinct upcoming match dates (ISO) found in the WC tag, sorted."""
+def list_match_days(limit_days: int = 7, tz: str | None = None) -> list[str]:
+    """Distinct upcoming match dates (ISO, in `tz`) found in the WC tag, sorted."""
     days: set[str] = set()
     for event in _iter_wc_events():
         end = event.get("endDate")
         match_title, _ = _classify_group(event.get("title", ""))
         if end and _is_match(match_title):
-            days.add(_local_date(end))
+            days.add(_local_date(end, tz))
     return sorted(days)[:limit_days]

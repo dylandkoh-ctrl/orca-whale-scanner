@@ -38,13 +38,14 @@ class ScanResult:
 def run_scan(date: str | None = None,
              thresholds: dict[str, float] | None = None,
              groups: dict[str, bool] | None = None,
-             conn=None) -> ScanResult:
-    """Run a full scan for `date` (default today). Threshold/group overrides from UI."""
+             conn=None,
+             tz: str | None = None) -> ScanResult:
+    """Run a full scan for `date` (default today in `tz`). Overrides from UI."""
     t = thresholds or {}
     scan_ts = int(time.time())
 
-    markets = discovery.discover_matches(date=date, groups=groups)
-    date = date or discovery._today_iso()
+    markets = discovery.discover_matches(date=date, groups=groups, tz=tz)
+    date = date or discovery._today_iso(tz)
     holders_df = holders.build_holders_frame(markets)
 
     flags = triggers.evaluate(

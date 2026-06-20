@@ -34,22 +34,29 @@ def get_conn():
 
 
 @st.cache_data(ttl=config.DISCOVERY_TTL)
-def match_days():
+def match_days(tz):
     try:
-        return discovery.list_match_days(limit_days=10)
+        return discovery.list_match_days(limit_days=10, tz=tz)
     except Exception:
         return []
 
 
 conn = get_conn()
 
+# The viewer's timezone (from their browser). Streamlit Cloud servers run in UTC,
+# so without this "today's games" would be computed in UTC and drop evening matches.
+try:
+    user_tz = st.context.timezone
+except Exception:
+    user_tz = None
+
 # --- sidebar ------------------------------------------------------------
 st.sidebar.title("🐋 Orca")
 st.sidebar.caption("World Cup single-match whale scanner")
 
-# Date picker — defaults to today, but offer the real upcoming match days.
-days = match_days()
-today = dt.date.today().isoformat()
+# Date picker — defaults to today (in the viewer's tz), offering real match days.
+days = match_days(user_tz)
+today = discovery._today_iso(user_tz)
 default_idx = days.index(today) if today in days else 0
 date = st.sidebar.selectbox(
     "Match day", options=days or [today],
@@ -87,7 +94,7 @@ run = st.sidebar.button("🔄 Refresh scan", type="primary", width="stretch")
 if run or "result" not in st.session_state or st.session_state.get("date") != date:
     with st.spinner(f"Scanning {date} matches…"):
         st.session_state["result"] = run_scan(
-            date=date, thresholds=thresholds, groups=groups, conn=conn)
+            date=date, thresholds=thresholds, groups=groups, conn=conn, tz=user_tz)
         st.session_state["date"] = date
 
 result = st.session_state["result"]
