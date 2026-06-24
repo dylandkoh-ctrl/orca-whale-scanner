@@ -61,6 +61,18 @@ def _is_match(title: str) -> bool:
     return bool(_MATCH_RE.match(title.strip()))
 
 
+def _match_key(title: str) -> str:
+    """Normalised key so naming variants of one match merge.
+
+    e.g. "Bosnia and Herzegovina vs. Qatar" and "Bosnia-Herzegovina vs. Qatar"
+    both -> "bosnia herzegovina vs. qatar".
+    """
+    s = title.lower().replace("&", " and ")
+    s = re.sub(r"[-]", " ", s)
+    s = re.sub(r"\s+and\s+", " ", s)   # drop the "and" connector in team names
+    return re.sub(r"\s+", " ", s).strip()
+
+
 def _classify_group(title: str) -> tuple[str, str]:
     """Split an event title into (match_title, group).
 
@@ -156,15 +168,33 @@ def discover_matches(date: str | None = None,
                 continue
             seen.add(cid)
             markets.append(norm)
+
+    # Merge naming variants of the same match (prefer the Moneyline event's
+    # spelling as canonical) so the UI shows one match, not near-duplicates.
+    canonical: dict[str, str] = {}
+    for m in markets:
+        k = _match_key(m["match_title"])
+        if k not in canonical or m["group"] == "Moneyline":
+            canonical[k] = m["match_title"]
+    for m in markets:
+        m["match_title"] = canonical[_match_key(m["match_title"])]
     return markets
 
 
-def list_match_days(limit_days: int = 7, tz: str | None = None) -> list[str]:
-    """Distinct upcoming match dates (ISO, in `tz`) found in the WC tag, sorted."""
+def list_match_days(limit_days: int = 10, tz: str | None = None,
+                    include_past: bool = False) -> list[str]:
+    """Distinct match dates (ISO, in `tz`) from the WC tag, today onward by default.
+
+    Takes the *earliest upcoming* days so today and future matches are always
+    offered — otherwise accumulating past days would crowd them out of the cap.
+    """
+    today = _today_iso(tz)
     days: set[str] = set()
     for event in _iter_wc_events():
         end = event.get("endDate")
         match_title, _ = _classify_group(event.get("title", ""))
         if end and _is_match(match_title):
-            days.add(_local_date(end, tz))
+            d = _local_date(end, tz)
+            if include_past or d >= today:
+                days.add(d)
     return sorted(days)[:limit_days]
