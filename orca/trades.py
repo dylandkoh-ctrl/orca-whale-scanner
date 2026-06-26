@@ -87,3 +87,56 @@ def fetch_large_prints(markets: list[dict[str, Any]],
     return (pd.DataFrame(rows, columns=PRINT_COLUMNS)
             .sort_values("timestamp", ascending=False)
             .reset_index(drop=True))
+
+
+WC_PRINT_COLUMNS = ["timestamp", "market", "pick", "side", "size", "price",
+                    "usd", "wallet", "display_name"]
+
+
+def fetch_wc_large_prints(min_usd: float = config.LARGE_PRINT_USD,
+                          pages: int = config.TRADES_PAGES,
+                          ttl: float = config.TRADES_TTL) -> pd.DataFrame:
+    """Recent large fills (>= `min_usd`) across ALL World Cup matches, newest first.
+
+    Unlike fetch_large_prints (scoped to one day's discovered markets), this scans
+    the global filtered feed and keeps anything on a WC match event (slug prefix
+    `fifwc-`), so it works as a cross-match history of the biggest bets.
+    """
+    limit = config.TRADES_PAGE_LIMIT
+    rows: list[dict] = []
+    for p in range(pages):
+        try:
+            data = get_json(
+                config.DATA_HOST, "/trades",
+                params={"limit": limit, "offset": p * limit,
+                        "filterType": "CASH", "filterAmount": int(min_usd)},
+                ttl=ttl,
+            )
+        except RuntimeError:
+            break
+        if not data:
+            break
+        for t in data:
+            if not (t.get("eventSlug") or "").startswith(config.WC_MATCH_SLUG_PREFIX):
+                continue
+            size = to_float(t.get("size"))
+            price = to_float(t.get("price"))
+            rows.append({
+                "timestamp": t.get("timestamp"),
+                "market": t.get("title", ""),          # e.g. "Will Japan win on 2026-06-25?"
+                "pick": t.get("outcome", ""),           # e.g. "Yes" / "Over"
+                "side": t.get("side"),
+                "size": size,
+                "price": price,
+                "usd": size * price,
+                "wallet": t.get("proxyWallet"),
+                "display_name": _clean_name(t),
+            })
+        if len(data) < limit:
+            break
+
+    if not rows:
+        return pd.DataFrame(columns=WC_PRINT_COLUMNS)
+    return (pd.DataFrame(rows, columns=WC_PRINT_COLUMNS)
+            .sort_values("timestamp", ascending=False)
+            .reset_index(drop=True))

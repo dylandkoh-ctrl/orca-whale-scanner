@@ -13,28 +13,30 @@ python3 -m venv .venv
 ./.venv/bin/python -m streamlit run app.py
 ```
 
-Click **Refresh scan** in the sidebar. Thresholds (triggers A/B/C) are editable there.
+Pick the match day in the sidebar; click **Refresh scan**.
+
+## Tabs
+
+- **🐋 Top Positions** — the largest single-match bets for the chosen day, entry
+  cost vs. current value + PnL, with the wallet behind each.
+- **🏆 Weekly Leaderboard** — 7-day P/L of the whales making large WC bets.
+- **📜 Largest Bets** — recent history of the biggest WC match bets and who made them.
 
 ## Layout
 
 | File | Role |
 |---|---|
-| `orca/config.py` | Thresholds, hosts, cache TTLs, WC tag, market-family toggles |
-| `orca/api.py` | httpx client: backoff, TTL cache, decodes Gamma's stringified JSON |
-| `orca/discovery.py` | Gamma WC-tag → that day's match markets (moneyline/totals/...) |
+| `orca/config.py` | Hosts, cache TTLs, WC tag, market-family toggles, thresholds |
+| `orca/api.py` | httpx client: backoff, TTL cache, parallel_map, decodes stringified JSON |
+| `orca/discovery.py` | Gamma WC-tag → a day's match markets (viewer-tz aware) |
 | `orca/holders.py` | `/holders` → tidy `wallet × bet × USD` DataFrame |
-| `orca/triggers.py` | Triggers A/B/C over the holders table |
-| `orca/profiling.py` | `/positions` + `/value` + `/traded` → PnL, win rate, MM filter, 0–100 grade |
-| `orca/store.py` | SQLite watchlist + flag history (`first_seen` / `last_seen`) |
+| `orca/profiling.py` | `/positions` + `/value` → entry/current detail, MM filter, grade |
+| `orca/trades.py` | `/trades` CASH-filtered large prints (per-day and WC-wide) |
+| `orca/leaderboard.py` | `user-pnl` per-wallet 7-day P/L → weekly leaderboard |
+| `orca/triggers.py` | Triggers A/B/C (used internally to pick wallets to profile) |
+| `orca/store.py` | SQLite persistence |
 | `orca/scan.py` | One refresh = one scan; ties the pipeline together |
-| `app.py` | Streamlit UI — Flagged Now / Watchlist / Consensus Board |
-
-## v1 scope
-
-That day's match markets (Moneyline + More Markets by default; Halftime, Exact
-Score, Corners, Player Props are one toggle away in `config.MARKET_GROUPS`) +
-holders + triggers A/B/C + watchlist. **Held for later:** Trigger D (`/trades`
-polling), APScheduler cron, CLOB WebSocket.
+| `app.py` | Streamlit UI — Top Positions / Weekly Leaderboard / Largest Bets |
 
 ## Notes baked in from live-API verification
 
@@ -46,4 +48,6 @@ polling), APScheduler cron, CLOB WebSocket.
   `Team vs. Team` events (rejects prop events like "What will the announcers say…").
 - Thresholds are calibrated to single-match scale (moneyline whales $400K–$1M;
   totals top ~$50–90K) and editable live in the sidebar.
-- The dedicated **leaderboard endpoint 404s**; grading uses `/positions` + `/value` + `/traded`.
+- No public global leaderboard endpoint, but `user-pnl-api.../user-pnl?interval=1w`
+  returns a per-wallet cumulative P/L series — 7-day P/L = last point − first point.
+- WC match trades are spotted in the global `/trades` feed by `eventSlug` prefix `fifwc-`.

@@ -1,13 +1,10 @@
 """Orca — World Cup Whale Scanner (Streamlit UI).
 
-Tracks large single-match bets for a given day — moneyline ("USA Win: No"),
-totals ("O/U 2.5: Over"), both-teams-to-score, spreads — and the sharp wallets
-behind them.
-
 Three tabs:
-  Flagged Now     — flagged bets grouped by match, + the resolution fine print.
-  Watchlist       — the growing roster of flagged wallets, graded.
-  Consensus Board — bets ranked by combined whale $ and # distinct whales.
+  Top Positions    — the largest single-match bets for a chosen day (entry vs
+                     current value), with the wallet behind each.
+  Weekly Leaderboard — 7-day P/L of the whales making large World Cup bets.
+  Largest Bets     — history of the biggest WC match bets and who made them.
 
 Run:  streamlit run app.py
 """
@@ -19,7 +16,7 @@ import time
 import pandas as pd
 import streamlit as st
 
-from orca import config, discovery, profiling, store, trades
+from orca import config, discovery, leaderboard, profiling, store, trades
 from orca.api import get_json, parallel_map
 from orca.scan import run_scan
 
@@ -69,22 +66,8 @@ groups = {g: st.sidebar.checkbox(g, value=default)
 
 top_n = st.sidebar.number_input("Top positions to show", value=5, min_value=1,
                                 max_value=50, step=1)
-min_print_usd = st.sidebar.number_input("Live print ≥ $ (Trigger D)",
-                                        value=config.LARGE_PRINT_USD, step=50_000)
-
-st.sidebar.subheader("Detection thresholds")
-thresholds = {
-    "single_whale_usd": st.sidebar.number_input(
-        "A · Single wallet ≥ $", value=config.SINGLE_WHALE_USD, step=25_000),
-    "combined_usd": st.sidebar.number_input(
-        "B · Combined ≥ $", value=config.COMBINED_USD, step=25_000),
-    "noise_floor_usd": st.sidebar.number_input(
-        "B · Noise floor (per wallet) ≥ $", value=config.NOISE_FLOOR_USD, step=5_000),
-    "cluster_wallet_usd": st.sidebar.number_input(
-        "C · Cluster wallet ≥ $", value=config.CLUSTER_WALLET_USD, step=5_000),
-    "cluster_min_wallets": st.sidebar.number_input(
-        "C · Cluster min wallets", value=config.CLUSTER_MIN_WALLETS, step=1),
-}
+large_bet_usd = st.sidebar.number_input(
+    "Large bet ≥ $ (leaderboard & history)", value=config.LARGE_PRINT_USD, step=50_000)
 
 st.sidebar.divider()
 run = st.sidebar.button("🔄 Refresh scan", type="primary", width="stretch")
@@ -94,7 +77,7 @@ run = st.sidebar.button("🔄 Refresh scan", type="primary", width="stretch")
 if run or "result" not in st.session_state or st.session_state.get("date") != date:
     with st.spinner(f"Scanning {date} matches…"):
         st.session_state["result"] = run_scan(
-            date=date, thresholds=thresholds, groups=groups, conn=conn, tz=user_tz)
+            date=date, groups=groups, conn=conn, tz=user_tz)
         st.session_state["date"] = date
 
 result = st.session_state["result"]
@@ -102,39 +85,26 @@ matches = sorted({m["match_title"] for m in result.markets})
 st.title("Orca — World Cup Whale Scanner")
 st.caption(
     f"**{result.date}** · {len(matches)} matches · {len(result.markets)} markets · "
-    f"{len(result.flags)} flagged bets · scanned "
-    f"{time.strftime('%H:%M:%S', time.localtime(result.scan_ts))}"
+    f"scanned {time.strftime('%H:%M:%S', time.localtime(result.scan_ts))}"
 )
 if matches:
     st.caption("Matches: " + " · ".join(matches))
 
 PROFILE_BASE = "https://polymarket.com/profile/"
 
-tab_top, tab_prints, tab_flagged, tab_watch, tab_consensus = st.tabs(
-    ["🐋 Top Positions", "🔴 Live Prints", "🚩 Flagged Now",
-     "📋 Watchlist", "📊 Consensus Board"]
+
+def _local_dt(ts):
+    """Unix seconds -> tz-aware datetime in the viewer's timezone (UTC fallback)."""
+    s = pd.to_datetime(ts, unit="s", utc=True)
+    try:
+        return s.dt.tz_convert(user_tz) if user_tz else s
+    except Exception:
+        return s
+
+
+tab_top, tab_lead, tab_history = st.tabs(
+    ["🐋 Top Positions", "🏆 Weekly Leaderboard", "📜 Largest Bets"]
 )
-
-
-def _grade_badge(p) -> str:
-    if p is None:
-        return "—"
-    return f"{p.grade}/100" + (" · ⚠️ MM/HEDGE" if p.is_mm_hedge else "")
-
-
-_TRIGGER_NAMES = {"A": "single whale", "B": "combined", "C": "consensus (3+)"}
-
-
-def _triggers_pretty(trigs) -> str:
-    if isinstance(trigs, str):
-        trigs = trigs.split("+")
-    return ", ".join(_TRIGGER_NAMES.get(t, t) for t in trigs)
-
-
-def _trigger_legend() -> str:
-    return (f"**A** one wallet ≥ ${thresholds['single_whale_usd']:,.0f} · "
-            f"**B** combined ≥ ${thresholds['combined_usd']:,.0f} · "
-            f"**C** 3+ wallets each ≥ ${thresholds['cluster_wallet_usd']:,.0f}")
 
 
 def _short(w: str) -> str:
@@ -253,148 +223,63 @@ with tab_top:
                     st.caption(f"Buy ${avg_price:.3f} → now ${cur_price:.3f} per share  ·  "
                                f"{int(r.shares):,} shares")
 
-
-# --- Live Prints (Trigger D) --------------------------------------------
-with tab_prints:
-    st.caption(f"Single fills ≥ ${min_print_usd:,.0f} on {result.date}'s matches — "
-               "live order flow, newest first. Catches the entry before it lands "
-               "in holders. (Shows recent flow, ~last few days.)")
-    force = st.button("🔄 Check for new prints", width="stretch")
-    prints = trades.fetch_large_prints(
-        result.markets, min_usd=min_print_usd, ttl=0 if force else config.TRADES_TTL)
-    if prints.empty:
-        st.info("No large prints at this threshold yet. Lower it in the sidebar, "
-                "or check back closer to / during a match.")
+# --- Weekly Leaderboard --------------------------------------------------
+with tab_lead:
+    st.caption(f"7-day profit of wallets making large (≥ ${large_bet_usd:,.0f}) "
+               "World Cup bets. Polymarket has no public global leaderboard, so this "
+               "ranks the whales the scanner sees by their P/L over the last week.")
+    wc_prints = trades.fetch_wc_large_prints(min_usd=large_bet_usd)
+    if wc_prints.empty:
+        st.info("No large WC bets found recently — lower the threshold in the sidebar.")
     else:
-        # Trigger D feeds the watchlist: profile the print wallets and persist.
-        pw = [w for w in prints["wallet"].unique() if w]
-        pprofiles = profiling.profile_wallets(pw)
-        pnames = {r.wallet: r.display_name for r in prints.itertuples() if r.display_name}
-        store.persist_scan(conn, [], pprofiles, pnames)
+        names = {r.wallet: r.display_name
+                 for r in wc_prints.itertuples() if r.display_name}
+        lb = leaderboard.weekly_leaderboard(wc_prints["wallet"].tolist(), names)
+        if lb.empty:
+            st.info("No P/L history available for these wallets yet.")
+        else:
+            medals = {0: "🥇", 1: "🥈", 2: "🥉"}
+            lb = lb.copy()
+            lb["rank"] = [medals.get(i, str(i + 1)) for i in range(len(lb))]
+            lb["trader"] = lb.apply(lambda r: r["name"] or _short(r["wallet"]), axis=1)
+            lb["profile"] = PROFILE_BASE + lb["wallet"]
+            st.dataframe(
+                lb[["rank", "trader", "week_pnl", "profile"]],
+                width="stretch", hide_index=True,
+                column_config={
+                    "rank": st.column_config.TextColumn("#", width="small"),
+                    "trader": st.column_config.TextColumn("trader"),
+                    "week_pnl": st.column_config.NumberColumn("7-day P/L", format="$%.0f"),
+                    "profile": st.column_config.LinkColumn("profile", display_text="View ↗"),
+                },
+            )
+            st.caption("P/L is each wallet's total profit change over the last ~7 days "
+                       "(across all their Polymarket markets, not just the World Cup).")
 
-        st.caption(f"{len(prints)} prints · {prints['usd'].sum():,.0f} total $ flagged")
-        for r in prints.itertuples():
-            ts = dt.datetime.fromtimestamp(r.timestamp).strftime("%b %d · %H:%M")
-            dot = "🟢" if r.side == "BUY" else "🔴"
-            with st.container(border=True):
-                st.markdown(f"{dot} **{r.side} · {r.bet_label}**  ·  ${r.usd:,.0f}")
-                c0, c1 = st.columns([3, 2])
-                c0.markdown(f"👤 **{r.display_name or r.wallet[:6] + '…' + r.wallet[-4:]}**")
-                c0.caption(f"{r.match_title} · {ts} · {int(r.size):,} sh @ ${r.price:.3f}")
-                c1.link_button("Polymarket ↗", PROFILE_BASE + r.wallet, width="stretch")
 
-
-# --- Flagged Now (grouped by match) -------------------------------------
-with tab_flagged:
-    st.caption("Bets where whale money has concentrated, grouped by match.")
-    if not result.flags:
-        st.info("No flagged bets at current thresholds. Lower them in the sidebar.")
+# --- Largest Bets (history) ---------------------------------------------
+with tab_history:
+    st.caption(f"The biggest World Cup match bets recently — single fills ≥ "
+               f"${large_bet_usd:,.0f}, newest first. (Recent flow, ~last few days.)")
+    hist = trades.fetch_wc_large_prints(min_usd=large_bet_usd)
+    if hist.empty:
+        st.info("No large WC bets at this threshold — lower it in the sidebar.")
     else:
-        by_match: dict[str, list] = {}
-        for f in result.flags:
-            by_match.setdefault(f.match_title, []).append(f)
-
-        for match_title in sorted(by_match, key=lambda m: -sum(f.total_usd for f in by_match[m])):
-            flags = by_match[match_title]
-            tot = sum(f.total_usd for f in flags)
-            st.markdown(f"#### ⚽ {match_title}")
-            st.caption(f"{len(flags)} flagged bets · ${tot:,.0f} whale money")
-            for f in flags:
-                best = max((result.profiles.get(w) for w in f.wallets if result.profiles.get(w)),
-                           key=lambda p: p.grade, default=None)
-                header = (f"**{f.bet_label}** — ${f.total_usd:,.0f} · "
-                          f"{f.n_accounts} accounts · grade {_grade_badge(best)}")
-                with st.expander(header):
-                    st.caption(f"Signal: {_triggers_pretty(f.triggers)} · "
-                               f"largest single wallet ${f.top_usd:,.0f}")
-                    rows = []
-                    for w in f.wallets:
-                        p = result.profiles.get(w)
-                        rows.append({
-                            "account": result.names.get(w) or _short(w),
-                            "grade": p.grade if p else None,
-                            "realized_pnl": p.realized_pnl if p else None,
-                            "portfolio": p.value_usd if p else None,
-                            "flag": "⚠️ MM" if (p and p.is_mm_hedge) else "",
-                        })
-                    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True,
-                                 column_config={
-                                     "account": st.column_config.TextColumn("account"),
-                                     "grade": st.column_config.ProgressColumn(
-                                         "grade", min_value=0, max_value=100),
-                                     "realized_pnl": st.column_config.NumberColumn("realized PnL", format="$%.0f"),
-                                     "portfolio": st.column_config.NumberColumn("portfolio", format="$%.0f"),
-                                     "flag": st.column_config.TextColumn(" ", width="small"),
-                                 })
-                    mkt = next((m for m in result.markets if m["condition_id"] == f.condition_id), None)
-                    if mkt and mkt.get("resolution_text"):
-                        with st.expander("📋 How this market resolves"):
-                            st.write(mkt["resolution_text"])
-        st.caption(_trigger_legend())
-
-
-# --- Watchlist -----------------------------------------------------------
-with tab_watch:
-    st.caption("Every wallet that's tripped a trigger or printed big — your growing roster of sharps.")
-    wl = store.watchlist_frame(conn)
-    if wl.empty:
-        st.info("Watchlist is empty — it fills as wallets trip a trigger or print big.")
-    else:
-        # New = only ever seen in one scan; Returning = seen across scans.
-        wl["status"] = wl.apply(
-            lambda r: "🆕 New" if (r["last_seen"] - r["first_seen"]) <= 60
-            else "↩️ Returning", axis=1)
-        n_new = int((wl["status"] == "🆕 New").sum())
-        n_ret = int((wl["status"] == "↩️ Returning").sum())
-
-        a, b, c = st.columns(3)
-        a.metric("Wallets tracked", len(wl))
-        b.metric("🆕 New", n_new)
-        c.metric("↩️ Returning", n_ret)
-
-        wl["account"] = wl.apply(
-            lambda r: r["display_name"] or _short(r["wallet"]), axis=1)
-        wl["mm"] = wl["is_mm_hedge"].map({1: "⚠️", 0: ""})
-        wl["last_seen_dt"] = pd.to_datetime(wl["last_seen"], unit="s")
-        wl = wl.sort_values(["status", "grade"], ascending=[True, False])
+        st.caption(f"{len(hist)} bets · ${hist['usd'].sum():,.0f} total")
+        h = hist.copy()
+        h["when"] = _local_dt(h["timestamp"])
+        h["trader"] = h.apply(lambda r: r["display_name"] or _short(r["wallet"]), axis=1)
+        h["profile"] = PROFILE_BASE + h["wallet"]
         st.dataframe(
-            wl[["status", "account", "mm", "grade", "realized_pnl",
-                "value_usd", "win_rate", "last_seen_dt"]],
+            h[["when", "market", "pick", "side", "usd", "trader", "profile"]],
             width="stretch", hide_index=True,
             column_config={
-                "status": st.column_config.TextColumn("status", width="small"),
-                "mm": st.column_config.TextColumn(" ", width="small"),
-                "grade": st.column_config.ProgressColumn("grade", min_value=0, max_value=100),
-                "realized_pnl": st.column_config.NumberColumn("realized PnL", format="$%.0f"),
-                "value_usd": st.column_config.NumberColumn("portfolio", format="$%.0f"),
-                "win_rate": st.column_config.NumberColumn("win rate", format="%.0f%%"),
-                "last_seen_dt": st.column_config.DatetimeColumn("last seen", format="MMM D, HH:mm"),
+                "when": st.column_config.DatetimeColumn("when", format="MMM D, HH:mm"),
+                "market": st.column_config.TextColumn("market", width="large"),
+                "pick": st.column_config.TextColumn("pick", width="small"),
+                "side": st.column_config.TextColumn("side", width="small"),
+                "usd": st.column_config.NumberColumn("amount", format="$%.0f"),
+                "trader": st.column_config.TextColumn("trader"),
+                "profile": st.column_config.LinkColumn("profile", display_text="View ↗"),
             },
         )
-        st.caption("Grades & PnL are from each wallet's current open book (an "
-                   "approximation of skill). Note: roster resets when the cloud app reboots.")
-
-
-# --- Consensus Board -----------------------------------------------------
-with tab_consensus:
-    st.caption("Where the money agrees — the bets the most whale dollars and the "
-               "most *different* whales are piling onto.")
-    cons = result.consensus
-    if cons.empty:
-        st.info("No consensus bets yet at current thresholds.")
-    else:
-        cons = cons.copy()
-        cons["signal"] = cons["triggers"].apply(_triggers_pretty)
-        st.dataframe(
-            cons[["match_title", "bet_label", "n_accounts", "total_usd", "top_usd", "signal"]],
-            width="stretch", hide_index=True,
-            column_config={
-                "match_title": st.column_config.TextColumn("match"),
-                "bet_label": st.column_config.TextColumn("bet"),
-                "n_accounts": st.column_config.NumberColumn("# whales"),
-                "total_usd": st.column_config.NumberColumn("combined $", format="$%.0f"),
-                "top_usd": st.column_config.NumberColumn("largest wallet", format="$%.0f"),
-                "signal": st.column_config.TextColumn("signal"),
-            },
-        )
-        st.caption(_trigger_legend())

@@ -11,6 +11,11 @@ SCOPE: single-match bets for a given day — moneyline ("USA Win: No"), totals
 GAMMA_HOST = "https://gamma-api.polymarket.com"
 CLOB_HOST = "https://clob.polymarket.com"
 DATA_HOST = "https://data-api.polymarket.com"
+USER_PNL_HOST = "https://user-pnl-api.polymarket.com"   # per-wallet P/L time series
+
+# World Cup single-match event slugs start with this prefix (e.g.
+# "fifwc-jpn-swe-2026-06-25"); used to spot WC match trades in the global feed.
+WC_MATCH_SLUG_PREFIX = "fifwc-"
 
 # --- Discovery scope ---
 # All World Cup events carry this Gamma tag; we page through it and keep the
