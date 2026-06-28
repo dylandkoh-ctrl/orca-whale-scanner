@@ -42,3 +42,73 @@ def weekly_leaderboard(wallets: list[str],
     return (pd.DataFrame(rows)
             .sort_values("week_pnl", ascending=False)
             .reset_index(drop=True))
+
+
+# --- realized record + blended "smart money" score ----------------------
+# Shrinkage prior for the win rate: until a wallet has a real sample of resolved
+# markets, its win rate is pulled toward PRIOR_WR. PRIOR_N is the pseudo-count —
+# higher = more skeptical of small samples (this is the "weight by sample size,
+# not headline" knob).
+PRIOR_N = 8.0
+PRIOR_WR = 0.5
+ACTIVITY_DEPTH = 1000   # /activity items to scan for resolved markets
+
+
+def realized_record(wallet: str, depth: int = ACTIVITY_DEPTH) -> tuple[int, float]:
+    """(resolved_market_count, realized_win_rate) from recent /activity.
+
+    A market counts as resolved if the wallet has a REDEEM on it; it's a win if
+    net realized (SELL + REDEEM proceeds − BUY cost) is positive. Approximate:
+    bounded to the last `depth` activity items, and cost can be undercounted if
+    a position was opened before the window.
+    """
+    acts = get_json(config.DATA_HOST, "/activity",
+                    params={"user": wallet, "limit": depth}, ttl=config.PROFILE_TTL) or []
+    by_cid: dict[str, dict] = {}
+    redeemed: set[str] = set()
+    for a in acts:
+        cid = a.get("conditionId")
+        if not cid:
+            continue
+        usd = to_float(a.get("usdcSize"))
+        d = by_cid.setdefault(cid, {"cost": 0.0, "proceeds": 0.0})
+        if a.get("type") == "TRADE":
+            if a.get("side") == "BUY":
+                d["cost"] += usd
+            elif a.get("side") == "SELL":
+                d["proceeds"] += usd
+        elif a.get("type") == "REDEEM":
+            d["proceeds"] += usd
+            redeemed.add(cid)
+    n = len(redeemed)
+    wins = sum(1 for c in redeemed if by_cid[c]["proceeds"] > by_cid[c]["cost"])
+    return n, (wins / n if n else 0.0)
+
+
+def smart_money_leaderboard(wallets: list[str],
+                            names: dict[str, str] | None = None) -> pd.DataFrame:
+    """Rank wallets by 7-day P/L scaled by a sample-size-shrunk realized win rate.
+
+    score = week_pnl × shrunk_win_rate, where
+      shrunk_win_rate = (wins + PRIOR_N·PRIOR_WR) / (resolved_n + PRIOR_N)
+    so a big P/L on a thin or poor resolved record is discounted, and a strong,
+    well-sampled win rate is rewarded. Columns: wallet, name, week_pnl,
+    resolved_n, win_rate, score.
+    """
+    names = names or {}
+    uniq = [w for w in dict.fromkeys(wallets) if w]
+    pnls = parallel_map(weekly_pnl, uniq)
+    records = parallel_map(realized_record, uniq)
+    rows = []
+    for w, p, (n, wr) in zip(uniq, pnls, records):
+        if p is None:
+            continue
+        shrunk = (wr * n + PRIOR_N * PRIOR_WR) / (n + PRIOR_N)
+        rows.append({"wallet": w, "name": names.get(w, ""), "week_pnl": p,
+                     "resolved_n": n, "win_rate": wr, "score": p * shrunk})
+    if not rows:
+        return pd.DataFrame(columns=["wallet", "name", "week_pnl",
+                                     "resolved_n", "win_rate", "score"])
+    return (pd.DataFrame(rows)
+            .sort_values("score", ascending=False)
+            .reset_index(drop=True))

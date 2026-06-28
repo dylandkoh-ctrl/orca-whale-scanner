@@ -3,8 +3,13 @@
 __pycache__/
 *.pyc
 
-# Local SQLite watchlist (ephemeral; recreated on first run)
+# Local SQLite (ephemeral; recreated on first run)
 orca.db
+orca_watchlist.db
+
+# Secrets — Telegram bot token / chat id (NEVER commit)
+.env
+.env.local
 
 # cloudflared binary (38MB, platform-specific — not needed in the cloud)
 cloudflared
