@@ -16,7 +16,7 @@ import time
 import pandas as pd
 import streamlit as st
 
-from orca import config, discovery, leaderboard, profiling, store, trades
+from orca import activity, config, discovery, leaderboard, profiling, store, trades
 from orca.api import get_json, parallel_map
 from orca.scan import run_scan
 
@@ -222,6 +222,41 @@ with tab_top:
                               delta=(f"${pnl:,.0f}" if pnl is not None else None))
                     st.caption(f"Buy ${avg_price:.3f} → now ${cur_price:.3f} per share  ·  "
                                f"{int(r.shares):,} shares")
+
+                    # Drill-down: tap to load this wallet's track record. Fetches
+                    # only the selected wallet (not every card) to stay fast.
+                    card_key = f"{r.wallet}:{r.rank}"
+                    inspecting = st.session_state.get("inspect") == card_key
+                    if st.button("✕ Hide track record" if inspecting else "📊 Track record",
+                                 key=f"tr_{card_key}", width="stretch"):
+                        st.session_state["inspect"] = None if inspecting else card_key
+                        inspecting = not inspecting
+                    if inspecting:
+                        with st.spinner("Loading track record…"):
+                            tr = activity.track_record(r.wallet)
+                        t1, t2, t3 = st.columns(3)
+                        t1.metric("7-day P/L",
+                                  f"${tr['week_pnl']:,.0f}" if tr["week_pnl"] is not None else "—")
+                        t2.metric("Win rate",
+                                  f"{tr['win_rate'] * 100:.0f}%" if tr["resolved_n"] else "—",
+                                  help=f"over {tr['resolved_n']} resolved markets")
+                        t3.metric("Realized P/L", f"${tr['realized_pnl']:,.0f}")
+                        rec = tr["recent"]
+                        if not rec.empty:
+                            rec = rec.copy()
+                            rec["when"] = _local_dt(rec["timestamp"])
+                            st.dataframe(
+                                rec[["when", "market", "pick", "side", "usd"]],
+                                width="stretch", hide_index=True,
+                                column_config={
+                                    "when": st.column_config.DatetimeColumn("when", format="MMM D, HH:mm"),
+                                    "market": st.column_config.TextColumn("recent bet", width="large"),
+                                    "pick": st.column_config.TextColumn("pick", width="small"),
+                                    "side": st.column_config.TextColumn("side", width="small"),
+                                    "usd": st.column_config.NumberColumn("size", format="$%.0f"),
+                                })
+                        st.caption("Win rate / realized P/L are over recently resolved "
+                                   "markets (approximate).")
 
 # --- Weekly Leaderboard --------------------------------------------------
 with tab_lead:
