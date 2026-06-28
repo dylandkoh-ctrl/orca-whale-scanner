@@ -259,9 +259,15 @@ def run() -> None:
             items = fetch_activity(wallet, cursor)
             if not items:
                 continue
+            # First time we see a wallet (no cursor yet): prime it to "now"
+            # WITHOUT alerting, so we only fire on bets placed after startup —
+            # not the wallet's existing history.
+            first_seen = cursor == 0
             newest_ts = cursor
             for item in items:
                 newest_ts = max(newest_ts, int(item.get("timestamp", 0)))
+                if first_seen:
+                    continue
                 if not qualifies(item, wc_condition_ids):
                     continue
                 key = dedupe_key(wallet, item)
