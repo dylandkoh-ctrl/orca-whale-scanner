@@ -86,9 +86,30 @@ def _classify_group(title: str) -> tuple[str, str]:
 
 
 def _bet_label(group_item_title: str, outcome: str, question: str) -> str:
-    """Human-readable bet, e.g. 'United States: No' or 'O/U 2.5: Over'."""
-    base = (group_item_title or question or "").strip()
-    # "Draw (United States vs. Australia)" -> "Draw"
+    """Human-readable bet, e.g. 'United States: No' or 'O/U 2.5: Over'.
+
+    Knockout disambiguation: the 3-way moneyline ("Will X win on <date>?") is the
+    REGULATION (90-min) result, while the separate "Team to Advance" market is who
+    progresses after extra time / penalties. Label them distinctly so a
+    "Canada to win (reg.)" bet can't be confused with "Canada to advance".
+    """
+    git = (group_item_title or "").strip()
+    ql = (question or "").lower()
+
+    # "Team to Advance" — outcomes are team names (e.g. "Canada").
+    if git == "Team to Advance" or "team to advance" in ql:
+        return f"{outcome} to advance"
+
+    # Regulation 3-way moneyline: "Will <team> win on <date>?" (Yes/No).
+    if "win on" in ql and outcome in ("Yes", "No"):
+        team = git or (question or "")
+        return f"{team} to win (reg.)" if outcome == "Yes" else f"{team} not to win (reg.)"
+
+    # Regulation draw: "... end in a draw?" (Yes/No).
+    if "end in a draw" in ql:
+        return "Draw (reg.)" if outcome == "Yes" else "No draw (reg.)"
+
+    base = git or (question or "").strip()
     if base.startswith("Draw"):
         base = "Draw"
     return f"{base}: {outcome}"
