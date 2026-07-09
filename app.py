@@ -260,12 +260,13 @@ with tab_top:
 
 # --- Weekly Leaderboard --------------------------------------------------
 with tab_lead:
-    st.caption(f"7-day profit of wallets making large (≥ ${large_bet_usd:,.0f}) "
+    lead_floor = config.TRADES_SAFE_FILTER_USD
+    st.caption(f"7-day profit of wallets making large (≥ ${lead_floor:,.0f}) "
                "World Cup bets. Polymarket has no public global leaderboard, so this "
                "ranks the whales the scanner sees by their P/L over the last week.")
-    wc_prints = trades.fetch_wc_large_prints(min_usd=large_bet_usd)
+    wc_prints = trades.fetch_wc_large_prints(min_usd=lead_floor)
     if wc_prints.empty:
-        st.info("No large WC bets found recently — lower the threshold in the sidebar.")
+        st.info("No large WC bets found recently — check back around match time.")
     else:
         names = {r.wallet: r.display_name
                  for r in wc_prints.itertuples() if r.display_name}

@@ -101,15 +101,20 @@ def fetch_wc_large_prints(min_usd: float = config.LARGE_PRINT_USD,
     Unlike fetch_large_prints (scoped to one day's discovered markets), this scans
     the global filtered feed and keeps anything on a WC match event (slug prefix
     `fifwc-`), so it works as a cross-match history of the biggest bets.
+
+    The server-side CASH filter 408s when `filterAmount` is high (it scans too far
+    to fill the page), so we filter at a SAFE amount server-side and apply the
+    real `min_usd` client-side.
     """
     limit = config.TRADES_PAGE_LIMIT
+    server_filter = min(int(min_usd), config.TRADES_SAFE_FILTER_USD)
     rows: list[dict] = []
     for p in range(pages):
         try:
             data = get_json(
                 config.DATA_HOST, "/trades",
                 params={"limit": limit, "offset": p * limit,
-                        "filterType": "CASH", "filterAmount": int(min_usd)},
+                        "filterType": "CASH", "filterAmount": server_filter},
                 ttl=ttl,
             )
         except RuntimeError:
@@ -121,6 +126,8 @@ def fetch_wc_large_prints(min_usd: float = config.LARGE_PRINT_USD,
                 continue
             size = to_float(t.get("size"))
             price = to_float(t.get("price"))
+            if size * price < min_usd:       # apply the real threshold client-side
+                continue
             rows.append({
                 "timestamp": t.get("timestamp"),
                 "market": t.get("title", ""),          # e.g. "Will Japan win on 2026-06-25?"

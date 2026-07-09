@@ -54,9 +54,12 @@ CLUSTER_MIN_WALLETS = 3
 # Trigger D: flag any single live fill >= this on /trades.
 LARGE_PRINT_USD = 300_000
 TRADES_PAGE_LIMIT = 100      # /trades times out above ~100 per call
-TRADES_PAGES = 1             # one page ≈ several days of >=$300K prints; offset
-                             # pagination on the filtered feed times out (408)
+TRADES_PAGES = 1             # one page ≈ several days of prints; offset pagination
+                             # on the filtered feed times out (408)
 TRADES_TTL = 30             # seconds to cache the prints feed
+# The server-side CASH filter 408s at high filterAmount (it scans too far to fill
+# the page). Cap the server filter here and apply the real threshold client-side.
+TRADES_SAFE_FILTER_USD = 100_000
 
 # --- Fetch behaviour ---
 HOLDERS_LIMIT = 100          # holders per token to pull from /holders
