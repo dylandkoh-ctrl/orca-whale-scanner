@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+import time
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -141,21 +142,48 @@ def _normalise_market(m: dict[str, Any], match_title: str, group: str,
     }
 
 
+_events_cache: dict[str, Any] = {"ts": 0.0, "data": None}
+
+
 def _iter_wc_events() -> list[dict[str, Any]]:
-    """Page through all open World Cup events via the tag."""
+    """Page through open World Cup events via the tag, cached in-process.
+
+    Memory guard: the tag now carries huge Player-Props events (300-400 markets
+    each) that we never scan. We drop the `markets` array of any event whose
+    group isn't enabled in MARKET_GROUPS, so peak memory stays a fraction of the
+    full payload (kept the tournament from OOMing the hosted container). Event
+    metadata (title/endDate) is retained so list_match_days still works.
+    """
+    now = time.time()
+    if (_events_cache["data"] is not None
+            and now - _events_cache["ts"] < config.DISCOVERY_TTL):
+        return _events_cache["data"]
+
+    keep = {g for g, on in config.MARKET_GROUPS.items() if on}
     events: list[dict[str, Any]] = []
     offset = 0
     while offset < config.DISCOVERY_MAX_EVENTS:
+        # ttl=0: don't retain the giant raw pages in the shared HTTP cache.
+        # Small page size caps the transient peak (a page of Player-Props events
+        # is huge), and we strip each page before fetching the next.
         page = get_json(
             config.GAMMA_HOST, "/events",
             params={"tag_id": config.WC_TAG_ID, "closed": "false",
-                    "limit": 100, "offset": offset},
-            ttl=config.DISCOVERY_TTL,
+                    "limit": config.EVENTS_PAGE_LIMIT, "offset": offset},
+            ttl=0,
         ) or []
-        events.extend(page)
-        if len(page) < 100:
+        for e in page:
+            _, group = _classify_group(e.get("title", ""))
+            if group not in keep and e.get("markets"):
+                e = dict(e)
+                e["markets"] = []          # drop markets we won't scan
+            events.append(e)
+        if len(page) < config.EVENTS_PAGE_LIMIT:
             break
-        offset += 100
+        offset += config.EVENTS_PAGE_LIMIT
+
+    _events_cache["ts"] = now
+    _events_cache["data"] = events
     return events
 
 

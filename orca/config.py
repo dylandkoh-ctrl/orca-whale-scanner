@@ -22,6 +22,8 @@ WC_MATCH_SLUG_PREFIX = "fifwc-"
 # events that kick off on the target date.
 WC_TAG_ID = "102232"          # "FIFA World Cup"
 DISCOVERY_MAX_EVENTS = 600    # safety cap on tag pagination
+EVENTS_PAGE_LIMIT = 30        # small pages cap peak memory (Player-Props events
+                              # carry 300-400 markets each; see discovery._iter_wc_events)
 
 # Which per-match event families to scan. Keys are matched against the suffix
 # after the team names in an event title (the base moneyline event has no
